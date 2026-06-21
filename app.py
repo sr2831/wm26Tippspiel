@@ -68,4 +68,112 @@ def calculate_scores(events):
                     if team1_name in countries:
                         player_results[player]["points"] += 1
                         player_results[player]["details"].append(f"1 P. | {team1_name} ({team1_score}:{team2_score} vs. {team2_name})")
-                    if team2_name
+                    if team2_name in countries:
+                        player_results[player]["points"] += 1
+                        player_results[player]["details"].append(f"1 P. | {team2_name} ({team2_score}:{team1_score} vs. {team1_name})")
+                else:
+                    if winner in countries:
+                        player_results[player]["points"] += 3
+                        player_results[player]["details"].append(f"3 P. | {winner} (Sieg {team1_score if winner==team1_name else team2_score}:{team2_score if winner==team1_name else team1_score} vs. {loser})")
+                    if loser in countries:
+                        player_results[player]["details"].append(f"0 P. | {loser} (Niederlage gegen {winner})")
+    return player_results
+
+def apply_bonus_points(player_results, standings_data):
+    if not standings_data or 'children' not in standings_data: return player_results
+    for group in standings_data['children']:
+        standings = group.get('standings', {})
+        entries = standings.get('entries', [])
+        
+        group_finished = True
+        for entry in entries:
+            stats = entry.get('stats', [])
+            games_played = 0
+            for stat in stats:
+                if stat.get('name') == 'gamesPlayed': games_played = int(stat.get('value', 0))
+            if games_played < 3:
+                group_finished = False
+                break
+        
+        if group_finished and len(entries) >= 2:
+            for i, entry in enumerate(entries[:2]):
+                team_name = entry.get('team', {}).get('name')
+                for player, countries in TEAMS.items():
+                    if team_name in countries:
+                        player_results[player]["points"] += 1
+                        player_results[player]["bonus_teams"].append(team_name)
+    return player_results
+
+# --- WEB-OBERFLÄCHE ---
+st.title("🏆 WM-Tippspiel Runde 2026")
+st.write("Die Tabellenstände aktualisieren sich automatisch im Hintergrund.")
+
+# Daten laden & berechnen
+games_json = fetch_data(URL_GAMES)
+events = games_json.get('events', []) if games_json else []
+standings_json = fetch_data(URL_STANDINGS)
+
+results = calculate_scores(events)
+results = apply_bonus_points(results, standings_json)
+
+# 1. Haupttabelle vorbereiten
+table_data = []
+for player, data in results.items():
+    bonus_anzahl = len(set(data["bonus_teams"]))
+    table_data.append({
+        "Mitspieler": player,
+        "Punkte": data["points"],
+        "Bonus-Teams": bonus_anzahl
+    })
+
+df = pd.DataFrame(table_data).sort_values(by="Punkte", ascending=False).reset_index(drop=True)
+df.index += 1  # Platzierung bei 1 starten lassen
+
+# Haupttabelle anzeigen
+st.subheader("Aktuelle Rangliste")
+st.dataframe(df, use_container_width=True)
+
+# 2. Detaillierte Aufklapp-Menüs pro Spieler
+st.subheader("Details pro Spieler")
+for player in df["Mitspieler"]:
+    data = results[player]
+    with st.expander(f"📊 Details für {player} ({data['points']} Punkte)"):
+        if data["bonus_teams"]:
+            st.markdown("**🌟 Erreichte Bonuspunkte (Nächste Runde):**")
+            for b_team in sorted(list(set(data["bonus_teams"]))):
+                st.write(f"🟢 +1 Punkt für **{b_team}**")
+            st.divider()
+        
+        st.markdown("**Spiele in der Wertung:**")
+        if data["details"]:
+            for detail in sorted(list(set(data["details"]))):
+                st.write(detail)
+        else:
+            st.write("Noch keine Spiele in der Wertung.")
+
+# --- DIAGNOSE-BEREICH ---
+st.divider()
+st.subheader("🔍 API-Diagnose: Alle importierten Spiele")
+
+if events:
+    diagnose_list = []
+    for event in events:
+        status = event.get('status', {}).get('type', {}).get('name', '')
+        competitions = event.get('competitions', [{}])[0]
+        competitors = competitions.get('competitors', [])
+        
+        if len(competitors) >= 2:
+            t1 = competitors[0].get('team', {}).get('name')
+            s1 = competitors[0].get('score', 0)
+            t2 = competitors[1].get('team', {}).get('name')
+            s2 = competitors[1].get('score', 0)
+            
+            diagnose_list.append({
+                "Spiel": f"{t1} vs. {t2}",
+                "Ergebnis": f"{s1}:{s2}",
+                "Status (API)": status
+            })
+    
+    st.table(pd.DataFrame(diagnose_list))
+else:
+    st.write("Keine Spieldaten von der API empfangen.")
