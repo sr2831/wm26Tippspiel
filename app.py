@@ -140,6 +140,31 @@ for player in df["Mitspieler"]:
 
         st.markdown("**Spiele in der Wertung:**")
         if data["details"]:
+            # --- DIAGNOSE-BEREICH (Ganz unten in die app.py einfügen) ---
+st.divider()
+st.subheader("🔍 API-Diagnose: Alle importierten Spiele")
+if events:
+    diagnose_list = []
+    for event in events:
+        status = event.get('status', {}).get('type', {}).get('name', '')
+        competitions = event.get('competitions', [{}])[0]
+        competitors = competitions.get('competitors', [])
+        
+        if len(competitors) >= 2:
+            t1 = competitors[0].get('team', {}).get('name')
+            s1 = competitors[0].get('score', 0)
+            t2 = competitors[1].get('team', {}).get('name')
+            s2 = competitors[1].get('score', 0)
+            
+            diagnose_list.append({
+                "Spiel": f"{t1} vs. {t2}",
+                "Ergebnis": f"{s1}:{s2}",
+                "Status (API)": status
+            })
+    
+    st.table(pd.DataFrame(diagnose_list))
+else:
+    st.write("Keine Spieldaten von der API empfangen.")
             for detail in sorted(list(set(data["details"]))):
                 st.write(detail)
         else:
