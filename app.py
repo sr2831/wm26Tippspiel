@@ -143,6 +143,7 @@ for player in df["Mitspieler"]:
             # --- DIAGNOSE-BEREICH (Ganz unten in die app.py einfügen) ---
 st.divider()
 st.subheader("🔍 API-Diagnose: Alle importierten Spiele")
+
 if events:
     diagnose_list = []
     for event in events:
@@ -162,6 +163,9 @@ if events:
                 "Status (API)": status
             })
     
+    st.table(pd.DataFrame(diagnose_list))
+else:
+    st.write("Keine Spieldaten von der API empfangen.")
     st.table(pd.DataFrame(diagnose_list))
 else:
     st.write("Keine Spieldaten von der API empfangen.")
