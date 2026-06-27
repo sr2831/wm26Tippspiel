@@ -110,4 +110,78 @@ def calculate_scores(events):
                             player_results[player]["points"] += 3
                             player_results[player]["details"].append((dt, f"3 P. | {winner} (Sieg {team1_score if winner==team1_name else team2_score}:{team2_score if winner==team1_name else team1_score} vs. {loser})"))
                     if loser in countries:
-                        player_results
+                        player_results[player]["details"].append((dt, f"0 P. | {loser} (Ausgeschieden gegen {winner})"))
+    return player_results
+
+# --- WEB-OBERFLÄCHE ---
+st.title("🏆 WM-Tippspiel Runde 2026")
+st.write("Die Tabellenstände aktualisieren sich automatisch im Hintergrund.")
+
+# Daten laden & berechnen
+games_json = fetch_data(URL_GAMES)
+events = games_json.get('events', []) if games_json else []
+
+results = calculate_scores(events)
+
+# 1. Haupttabelle vorbereiten
+table_data = []
+for player, data in results.items():
+    table_data.append({
+        "Mitspieler": player,
+        "Punkte": data["points"]
+    })
+
+df = pd.DataFrame(table_data).sort_values(by="Punkte", ascending=False).reset_index(drop=True)
+df.index += 1  # Platzierung bei 1 starten lassen
+
+# Haupttabelle anzeigen
+st.subheader("Aktuelle Rangliste")
+st.dataframe(df, use_container_width=True)
+
+# 2. Detaillierte Aufklapp-Menüs pro Spieler
+st.subheader("Details pro Spieler")
+for player in df["Mitspieler"]:
+    data = results[player]
+    with st.expander(f"📊 Details für {player} ({data['points']} Punkte)"):
+        st.markdown("**Spiele in der Wertung (Chronologisch):**")
+        if data["details"]:
+            unique_details = list(set(data["details"]))
+            sorted_details = sorted(unique_details, key=lambda x: x[0])
+            for dt_obj, text in sorted_details:
+                time_prefix = f"📅 *{dt_obj.strftime('%d.%m. %H:%M')}* | " if dt_obj != datetime.min else ""
+                st.write(f"{time_prefix}{text}")
+        else:
+            st.write("Noch keine Spiele in der Wertung.")
+
+# --- DIAGNOSE-BEREICH ---
+st.divider()
+st.subheader("🔍 API-Diagnose: Alle importierten Spiele (Nach Datum sortiert)")
+
+if events:
+    diagnose_list = []
+    sorted_debug_events = sorted(events, key=lambda x: x.get('date', ''))
+    
+    for event in sorted_debug_events:
+        status = event.get('status', {}).get('type', {}).get('name', '')
+        competitions = event.get('competitions', [{}])[0]
+        competitors = competitions.get('competitors', [])
+        
+        if len(competitors) >= 2:
+            t1 = competitors[0].get('team', {}).get('name')
+            s1 = competitors[0].get('score', 0)
+            t2 = competitors[1].get('team', {}).get('name')
+            s2 = competitors[1].get('score', 0)
+            
+            dt = get_mesz_time(event.get('date', ''))
+            date_display = dt.strftime('%d.%m.%Y - %H:%M Uhr') if dt != datetime.min else "Unbekannt"
+            
+            diagnose_list.append({
+                "Anstoß (MESZ)": date_display,
+                "Spiel": f"{t1} vs. {t2}",
+                "Ergebnis": f"{s1}:{s2}",
+                "Status (API)": status
+            })
+    
+    st.dataframe(pd.DataFrame(diagnose_list), use_container_width=True)
+else:
+    st.write("Keine Spieldaten von der API empfangen.")
