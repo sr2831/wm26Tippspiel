@@ -16,12 +16,10 @@ TEAMS = {
 }
 
 URL_GAMES = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?limit=100"
-URL_STANDINGS = "https://site.api.espn.com/apis/v2/sports/soccer/fifa.world/standings"
 
 # Hilfsfunktion: Konvertiert die API-Uhrzeit (UTC) in MESZ (Stuttgart-Zeit)
 def get_mesz_time(date_str):
     try:
-        # ESPN liefert z.B. "2026-06-21T13:00Z" oder "2026-06-21T13:00:00Z"
         date_str = date_str.replace("Z", "+00:00")
         utc_dt = datetime.fromisoformat(date_str)
         mesz_tz = pytz.timezone("Europe/Berlin")
@@ -46,7 +44,7 @@ def fetch_data(url):
         return None
 
 def calculate_scores(events):
-    player_results = {player: {"points": 0, "details": [], "bonus_teams": []} for player in TEAMS}
+    player_results = {player: {"points": 0, "details": []} for player in TEAMS}
     seen_matches = set()
     if not events: return player_results
     
@@ -69,17 +67,27 @@ def calculate_scores(events):
             team2_score = int(competitors[1].get('score', 0))
             seen_matches.add(match_id)
             
-            # Datum für die Textausgabe formatieren
             dt = get_mesz_time(event.get('date', ''))
-            time_str = dt.strftime('%d.%m. - %H:%M') if dt != datetime.min else ""
-            prefix = f"[{time_str}] " if time_str else ""
 
-            if team1_score > team2_score:
-                winner, loser, draw = team1_name, team2_name, False
-            elif team2_score > team1_score:
-                winner, loser, draw = team2_name, team1_name, False
+            # K.o.-Runden-Erkennung: Prüfen, ob es ein festes Weiterkommen ("winner" Flag) in der API gibt
+            t1_winner_flag = competitors[0].get('winner', False)
+            t2_winner_flag = competitors[1].get('winner', False)
+            is_knockout = t1_winner_flag or t2_winner_flag
+
+            if is_knockout:
+                # In der K.o.-Runde zählt das Weiterkommen. Der Sieger erhält 4 Punkte (3 Sieg + 1 Weiterkommen)
+                if t1_winner_flag:
+                    winner, loser, draw = team1_name, team2_name, False
+                else:
+                    winner, loser, draw = team2_name, team1_name, False
             else:
-                winner, loser, draw = None, None, True
+                # Reguläre Gruppenphase nach Toren (3 Punkte Sieg, 1 Punkt Unentschieden)
+                if team1_score > team2_score:
+                    winner, loser, draw = team1_name, team2_name, False
+                elif team2_score > team1_score:
+                    winner, loser, draw = team2_name, team1_name, False
+                else:
+                    winner, loser, draw = None, None, True
 
             for player, countries in TEAMS.items():
                 if draw:
@@ -91,35 +99,17 @@ def calculate_scores(events):
                         player_results[player]["details"].append((dt, f"1 P. | {team2_name} ({team2_score}:{team1_score} vs. {team1_name})"))
                 else:
                     if winner in countries:
-                        player_results[player]["points"] += 3
-                        player_results[player]["details"].append((dt, f"3 P. | {winner} (Sieg {team1_score if winner==team1_name else team2_score}:{team2_score if winner==team1_name else team1_score} vs. {loser})"))
+                        if is_knockout:
+                            player_results[player]["points"] += 4
+                            if team1_score == team2_score:
+                                player_results[player]["details"].append((dt, f"4 P. | {winner} (K.O.-Sieg i.E. {team1_score}:{team2_score} vs. {loser} – inkl. Bonus)"))
+                            else:
+                                player_results[player]["details"].append((dt, f"4 P. | {winner} (K.O.-Sieg {team1_score if winner==team1_name else team2_score}:{team2_score if winner==team1_name else team1_score} vs. {loser} – inkl. Bonus)"))
+                        else:
+                            player_results[player]["points"] += 3
+                            player_results[player]["details"].append((dt, f"3 P. | {winner} (Sieg {team1_score if winner==team1_name else team2_score}:{team2_score if winner==team1_name else team1_score} vs. {loser})"))
                     if loser in countries:
-                        player_results[player]["details"].append((dt, f"0 P. | {loser} (Niederlage gegen {winner})"))
-    return player_results
-
-def apply_bonus_points(player_results, standings_data):
-    if not standings_data or 'children' not in standings_data: return player_results
-    for group in standings_data['children']:
-        standings = group.get('standings', {})
-        entries = standings.get('entries', [])
-        
-        group_finished = True
-        for entry in entries:
-            stats = entry.get('stats', [])
-            games_played = 0
-            for stat in stats:
-                if stat.get('name') == 'gamesPlayed': games_played = int(stat.get('value', 0))
-            if games_played < 3:
-                group_finished = False
-                break
-        
-        if group_finished and len(entries) >= 2:
-            for i, entry in enumerate(entries[:2]):
-                team_name = entry.get('team', {}).get('name')
-                for player, countries in TEAMS.items():
-                    if team_name in countries:
-                        player_results[player]["points"] += 1
-                        player_results[player]["bonus_teams"].append(team_name)
+                        player_results[player]["details"].append((dt, f"0 P. | {loser} (Ausgeschieden gegen {winner})"))
     return player_results
 
 # --- WEB-OBERFLÄCHE ---
@@ -129,19 +119,15 @@ st.write("Die Tabellenstände aktualisieren sich automatisch im Hintergrund.")
 # Daten laden & berechnen
 games_json = fetch_data(URL_GAMES)
 events = games_json.get('events', []) if games_json else []
-standings_json = fetch_data(URL_STANDINGS)
 
 results = calculate_scores(events)
-results = apply_bonus_points(results, standings_json)
 
 # 1. Haupttabelle vorbereiten
 table_data = []
 for player, data in results.items():
-    bonus_anzahl = len(set(data["bonus_teams"]))
     table_data.append({
-        "Mitweiler": player,
-        "Punkte": data["points"],
-        "Bonus-Teams": bonus_anzahl
+        "Mitspieler": player,
+        "Punkte": data["points"]
     })
 
 df = pd.DataFrame(table_data).sort_values(by="Punkte", ascending=False).reset_index(drop=True)
@@ -153,18 +139,11 @@ st.dataframe(df, use_container_width=True)
 
 # 2. Detaillierte Aufklapp-Menüs pro Spieler
 st.subheader("Details pro Spieler")
-for player in df["Mitweiler"]:
+for player in df["Mitspieler"]:
     data = results[player]
     with st.expander(f"📊 Details für {player} ({data['points']} Punkte)"):
-        if data["bonus_teams"]:
-            st.markdown("**🌟 Erreichte Bonuspunkte (Nächste Runde):**")
-            for b_team in sorted(list(set(data["bonus_teams"]))):
-                st.write(f"🟢 +1 Punkt für **{b_team}**")
-            st.divider()
-        
         st.markdown("**Spiele in der Wertung (Chronologisch):**")
         if data["details"]:
-            # Löscht Duplikate und sortiert die Tupel anhand des echten datetime-Objekts (Index 0)
             unique_details = list(set(data["details"]))
             sorted_details = sorted(unique_details, key=lambda x: x[0])
             for dt_obj, text in sorted_details:
@@ -179,7 +158,6 @@ st.subheader("🔍 API-Diagnose: Alle importierten Spiele (Nach Datum sortiert)"
 
 if events:
     diagnose_list = []
-    # Sortiert auch den Debug-Bereich chronologisch nach API-Datum
     sorted_debug_events = sorted(events, key=lambda x: x.get('date', ''))
     
     for event in sorted_debug_events:
